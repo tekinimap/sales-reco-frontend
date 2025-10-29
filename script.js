@@ -1,6 +1,6 @@
 // ====== KONFIGURATION ======
 // Trage hier die URL deines Cloudflare Workers ein, sobald er deployed ist!
-const WORKER_URL = 'https://dein-worker-name.dein-subdomain.workers.dev'; 
+const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev'; 
 // ==========================
 
 // Globale Variablen zum Speichern der geparsten Daten
