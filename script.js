@@ -1,15 +1,13 @@
 /*
  * =================================================================
- * NEUE VERSION (v3)
- * - Fügt Abgleichs-Bericht hinzu
- * - Passt handleReport an, um neues JSON zu verarbeiten
+ * NEUE VERSION (v4)
+ * - Fügt Logik für getrennte Sammel-KV-Berichte hinzu
  * =================================================================
  */
 window.onload = function() {
     
     // ====== KONFIGURATION ======
-    // Trage hier die URL deines Cloudflare Workers ein
-    const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev'; 
+    const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev'; // Dein Link ist gespeichert!
     // ==========================
 
     // Globale Variablen
@@ -27,7 +25,7 @@ window.onload = function() {
     // Karten-Container
     const summaryCard = document.getElementById('summary-results-card');
     const fuzzyCard = document.getElementById('fuzzy-match-card');
-    const recoReportCard = document.getElementById('reconciliation-report-card'); // NEU
+    const recoReportCard = document.getElementById('reconciliation-report-card');
     const reportCard = document.getElementById('final-report-card');
 
     // Ergebnis-Divs
@@ -42,7 +40,9 @@ window.onload = function() {
     const recoUnmatchedERPDiv = document.getElementById('reco-report-unmatchedERP');
     const recoUnmatchedAirtableDiv = document.getElementById('reco-report-unmatchedAirtable');
     const recoFuzzyMatchedDiv = document.getElementById('reco-report-fuzzyMatched');
-    const recoSammelKVsDiv = document.getElementById('reco-report-sammelKVs');
+    // ANGEPASST:
+    const recoSammelKVsMatchedDiv = document.getElementById('reco-report-sammelKVs-matched');
+    const recoSammelKVsFailedDiv = document.getElementById('reco-report-sammelKVs-failed');
 
 
     // Event Listeners
@@ -66,7 +66,7 @@ window.onload = function() {
         setLoading(true);
         summaryCard.style.display = 'none';
         fuzzyCard.style.display = 'none';
-        recoReportCard.style.display = 'none'; // NEU
+        recoReportCard.style.display = 'none';
         reportCard.style.display = 'none';
 
         const parseSuccess = await parseFiles();
@@ -164,7 +164,7 @@ window.onload = function() {
     async function handleReport() {
         setLoading(true);
         errorMessage.textContent = '';
-        recoReportCard.style.display = 'none'; // NEU
+        recoReportCard.style.display = 'none';
         reportCard.style.display = 'none';
 
         const confirmedMatches = [];
@@ -189,7 +189,7 @@ window.onload = function() {
                 throw new Error(err.error || `Server-Fehler: ${response.statusText}`);
             }
 
-            const reports = await response.json(); // Bekommt { reconciliation: {...}, finalReports: {...} }
+            const reports = await response.json();
 
             // 1. NEUEN Abgleichs-Bericht rendern
             renderReconciliationReport(reports.reconciliation);
@@ -233,7 +233,7 @@ window.onload = function() {
             return;
         }
         let tableHTML = `<table class="fuzzy-match-table"><thead><tr>
-            <th>Auswählen</th><th>Airtable-Eintrag (ohne KV)</th><th>ERP-Eintrag (fehlt in Airtable)</th><th>Score</th>
+            <th>Auswählen</th><th>Airtable-Eintrag (ohne KV)</th><th>Gefundener ERP-Eintrag</th><th>Score</th>
             </tr></thead><tbody>`;
         suggestions.forEach((match, index) => {
             const matchData = {
@@ -263,10 +263,10 @@ window.onload = function() {
                 </tbody>
             </table>`;
         teamReportDiv.innerHTML = format(reports.teamReport);
-        personReportDiv.innerHTML = format(reports.personReport);
+        personReportDiv.innerHTML = format(results.personReport); // FIX: reports.personReport
     }
     
-    // ====== RENDER-FUNKTIONEN (NEU) ======
+    // ====== RENDER-FUNKTIONEN (NEU/ANGEPASST) ======
     
     function renderReconciliationReport(reco) {
         // 1. Finanz-Zusammenfassung
@@ -283,7 +283,7 @@ window.onload = function() {
         
         // 2. Bericht 1: KVs zum Aktualisieren
         recoKVsToUpdateDiv.innerHTML = renderRecoTable(
-            'To-Do: Beträge in Airtable aktualisieren',
+            'To-Do: Beträge in Airtable aktualisieren (1:1-Treffer)',
             ['KV-Nummer', 'Projekttitel', 'Airtable-Betrag', 'ERP-Betrag (NEU)'],
             reco.kvsToUpdate.map(row => `
                 <tr>
@@ -297,13 +297,13 @@ window.onload = function() {
         
         // 3. Bericht 4: Nicht zugeordnete KVs (Fehlen in Airtable)
         recoUnmatchedERPDiv.innerHTML = renderRecoTable(
-            'To-Do: Diese KVs fehlen in Airtable',
+            'To-Do: Diese KVs fehlen in Airtable (oder Fuzzy-Match wurde abgelehnt)',
             ['KV-Nummer', 'ERP-Titel', 'ERP-Betrag'],
             reco.unmatchedERP.map(row => `
                 <tr>
                     <td>${row.kv}</td>
                     <td>${row.erpTitle}</td>
-                    <td class="amount">${formatCurrency(row.erpAmount)}</td>
+                    <td class"amount">${formatCurrency(row.erpAmount)}</td>
                 </tr>
             `)
         );
@@ -335,15 +335,29 @@ window.onload = function() {
             `)
         );
         
-        // 6. Bericht 2: Manuell zu prüfende Sammel-KVs
-        recoSammelKVsDiv.innerHTML = renderRecoTable(
-            'Manuell zu prüfen: Airtable Sammel-KVs',
-            ['Airtable-Titel', 'KV-Nummern (Airtable)', 'Airtable-Betrag'],
-            reco.sammelKVs.map(row => `
+        // 6. NEU: Erfolgreich zugeordnete Sammel-KVs
+        recoSammelKVsMatchedDiv.innerHTML = renderRecoTable(
+            'Info: Erfolgreich zugeordnete Rahmenverträge (Sammel-KVs)',
+            ['Airtable-Titel', 'Gefundene ERP KVs', 'Airtable-Betrag', 'ERP-Summe'],
+            reco.sammelKVsMatched.map(row => `
+                <tr>
+                    <td>${row.airtableTitle}</td>
+                    <td>${row.foundKVs.join(', ')}</td>
+                    <td class="amount">${formatCurrency(row.sumAirtable)}</td>
+                    <td class="amount"><strong>${formatCurrency(row.sumERP)}</strong></td>
+                </tr>
+            `)
+        );
+
+        // 7. NEU: Fehlgeschlagene Sammel-KVs
+        recoSammelKVsFailedDiv.innerHTML = renderRecoTable(
+            'Manuell zu prüfen: Sammel-KVs mit fehlenden Abrufen',
+            ['Airtable-Titel', 'Airtable KVs (Original)', 'Fehlende ERP KVs'],
+            reco.sammelKVsFailed.map(row => `
                 <tr>
                     <td>${row.airtableTitle}</td>
                     <td>${row.airtableKVs}</td>
-                    <td class="amount">${formatCurrency(row.airtableAmount)}</td>
+                    <td>${row.missingKVs.join(', ')}</td>
                 </tr>
             `)
         );
@@ -357,9 +371,8 @@ window.onload = function() {
             return `<div class="reco-section"><h4>${title}</h4><p>Keine Einträge.</p></div>`;
         }
         
-        // Fügt 'amount' Klasse zu Spaltenüberschriften hinzu, die 'Betrag' enthalten
         const headerHTML = headers.map(h => 
-            h.toLowerCase().includes('betrag') ? `<th class="amount">${h}</th>` : `<th>${h}</th>`
+            h.toLowerCase().includes('betrag') || h.toLowerCase().includes('summe') ? `<th class="amount">${h}</th>` : `<th>${h}</th>`
         ).join('');
         
         return `
