@@ -1,23 +1,22 @@
 /*
  * =================================================================
- * NEUE VERSION: Der gesamte Code wird in window.onload gewrappt,
- * um sicherzustellen, dass alle Bibliotheken (PapaParse etc.)
- * geladen sind, bevor unser Code ausgeführt wird.
+ * NEUE VERSION (v3)
+ * - Fügt Abgleichs-Bericht hinzu
+ * - Passt handleReport an, um neues JSON zu verarbeiten
  * =================================================================
  */
 window.onload = function() {
     
     // ====== KONFIGURATION ======
     // Trage hier die URL deines Cloudflare Workers ein
-const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     // ==========================
+    const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev'; 
+    // ==========================
 
-    // Globale Variablen zum Speichern der geparsten Daten
+    // Globale Variablen
     let parsedAirtableData = null;
     let parsedErpData = null;
 
     // DOM-Elemente
-    // Wir müssen sie *innerhalb* von window.onload suchen,
-    // da sie erst dann garantiert existieren.
     const analyzeButton = document.getElementById('analyze-button');
     const reportButton = document.getElementById('report-button');
     const airtableFileInput = document.getElementById('airtable-file');
@@ -28,6 +27,7 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
     // Karten-Container
     const summaryCard = document.getElementById('summary-results-card');
     const fuzzyCard = document.getElementById('fuzzy-match-card');
+    const recoReportCard = document.getElementById('reconciliation-report-card'); // NEU
     const reportCard = document.getElementById('final-report-card');
 
     // Ergebnis-Divs
@@ -35,12 +35,18 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
     const fuzzyMatchDiv = document.getElementById('fuzzy-match-area');
     const teamReportDiv = document.getElementById('team-report-area');
     const personReportDiv = document.getElementById('person-report-area');
-
     
-    // Event Listener für den "Abgleich starten"-Button
-    analyzeButton.addEventListener('click', handleAnalyze);
+    // NEUE Ergebnis-Divs für Abgleichs-Bericht
+    const recoTotalsDiv = document.getElementById('reco-report-totals');
+    const recoKVsToUpdateDiv = document.getElementById('reco-report-kvsToUpdate');
+    const recoUnmatchedERPDiv = document.getElementById('reco-report-unmatchedERP');
+    const recoUnmatchedAirtableDiv = document.getElementById('reco-report-unmatchedAirtable');
+    const recoFuzzyMatchedDiv = document.getElementById('reco-report-fuzzyMatched');
+    const recoSammelKVsDiv = document.getElementById('reco-report-sammelKVs');
 
-    // Event Listener für den "Berichte generieren"-Button
+
+    // Event Listeners
+    analyzeButton.addEventListener('click', handleAnalyze);
     reportButton.addEventListener('click', handleReport);
 
     
@@ -48,24 +54,21 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
      * Hauptfunktion für den ersten Abgleich (Phase 1-3)
      */
     async function handleAnalyze() {
-        
-        // NEUER CHECK: Wir prüfen manuell, ob die Bibliotheken geladen sind
         if (typeof Papa === 'undefined') {
-            errorMessage.textContent = 'Fehler: PapaParse (CSV-Bibliothek) konnte nicht geladen werden. Bitte Ad-Blocker prüfen und Seite neu laden.';
+            errorMessage.textContent = 'Fehler: PapaParse (CSV-Bibliothek) konnte nicht geladen werden. Bitte Cache leeren (Strg+Shift+R) und Seite neu laden.';
             return;
         }
         if (typeof readXlsxFile === 'undefined') {
-            errorMessage.textContent = 'Fehler: Read-Excel-File (Excel-Bibliothek) konnte nicht geladen werden. Bitte Ad-Blocker prüfen und Seite neu laden.';
+            errorMessage.textContent = 'Fehler: Read-Excel-File (Excel-Bibliothek) konnte nicht geladen werden. Bitte Cache leeren (Strg+Shift+R) und Seite neu laden.';
             return;
         }
 
-        // UI zurücksetzen
         setLoading(true);
         summaryCard.style.display = 'none';
         fuzzyCard.style.display = 'none';
+        recoReportCard.style.display = 'none'; // NEU
         reportCard.style.display = 'none';
 
-        // 1. Dateien parsen
         const parseSuccess = await parseFiles();
         if (!parseSuccess) {
             setLoading(false);
@@ -73,7 +76,6 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
         }
 
         try {
-            // 2. Daten an den Worker /analyze Endpunkt senden
             const response = await fetch(`${WORKER_URL}/analyze`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -89,12 +91,9 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
             }
 
             const results = await response.json();
-
-            // 3. Ergebnisse rendern
             renderSummary(results.summary);
             renderFuzzyMatchTable(results.suggestions);
 
-            // 4. UI-Karten anzeigen
             summaryCard.style.display = 'block';
             fuzzyCard.style.display = 'block';
             reportButton.style.display = 'block';
@@ -108,8 +107,7 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
     }
     
     /**
-     * Parsed die hochgeladenen Dateien und speichert sie global.
-     * @returns {Promise<boolean>} True bei Erfolg, False bei Fehler.
+     * Parsed die hochgeladenen Dateien.
      */
     async function parseFiles() {
         errorMessage.textContent = '';
@@ -122,9 +120,7 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
         }
 
         try {
-            // Parse Airtable CSV
             parsedAirtableData = await new Promise((resolve, reject) => {
-                // HIER WAR DER FEHLER: "Papa" war undefined.
                 Papa.parse(airtableFile, {
                     header: true,
                     skipEmptyLines: true,
@@ -134,9 +130,7 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
                 });
             });
 
-            // Parse ERP (Excel oder CSV)
             if (erpFile.name.endsWith('.xlsx')) {
-                // read-excel-file gibt ein Array von Arrays zurück. Wir konvertieren es in ein Array von Objekten.
                 const rows = await readXlsxFile(erpFile);
                 const headers = rows[0];
                 parsedErpData = rows.slice(1).map(row => {
@@ -147,7 +141,6 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
                     return obj;
                 });
             } else {
-                // Parse ERP CSV
                 parsedErpData = await new Promise((resolve, reject) => {
                     Papa.parse(erpFile, {
                         header: true,
@@ -157,7 +150,6 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
                     });
                 });
             }
-            
             return true;
         } catch (error) {
             errorMessage.textContent = `Fehler beim Parsen der Dateien: ${error.message}`;
@@ -166,16 +158,15 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
         }
     }
 
-
     /**
      * Hauptfunktion für die finalen Berichte (Phase 4)
      */
     async function handleReport() {
         setLoading(true);
         errorMessage.textContent = '';
+        recoReportCard.style.display = 'none'; // NEU
         reportCard.style.display = 'none';
 
-        // 1. Bestätigte Matches aus der Tabelle sammeln
         const confirmedMatches = [];
         const checkboxes = document.querySelectorAll('.fuzzy-checkbox:checked');
         checkboxes.forEach(box => {
@@ -183,7 +174,6 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
         });
 
         try {
-            // 2. Originaldaten + bestätigte Matches an den /report Endpunkt senden
             const response = await fetch(`${WORKER_URL}/report`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -199,10 +189,14 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
                 throw new Error(err.error || `Server-Fehler: ${response.statusText}`);
             }
 
-            const reports = await response.json();
+            const reports = await response.json(); // Bekommt { reconciliation: {...}, finalReports: {...} }
 
-            // 3. Finale Berichte rendern
-            renderFinalReports(reports);
+            // 1. NEUEN Abgleichs-Bericht rendern
+            renderReconciliationReport(reports.reconciliation);
+            recoReportCard.style.display = 'block';
+
+            // 2. Finale Berichte rendern
+            renderFinalReports(reports.finalReports);
             reportCard.style.display = 'block';
 
         } catch (error) {
@@ -214,7 +208,7 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
     }
 
 
-    // ====== RENDER-FUNKTIONEN ======
+    // ====== RENDER-FUNKTIONEN (ALT) ======
 
     function setLoading(isLoading) {
         loader.style.display = isLoading ? 'block' : 'none';
@@ -238,51 +232,22 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
             fuzzyMatchDiv.innerHTML = '<p>Keine wahrscheinlichen Zuordnungen gefunden. Sie können direkt die Berichte generieren.</p>';
             return;
         }
-
-        let tableHTML = `
-            <table class="fuzzy-match-table">
-                <thead>
-                    <tr>
-                        <th>Auswählen</th>
-                        <th>Airtable-Eintrag (ohne KV)</th>
-                        <th>ERP-Eintrag (fehlt in Airtable)</th>
-                        <th>Score</th>
-                    </tr>
-                </thead>
-                <tbody>
-        `;
-
+        let tableHTML = `<table class="fuzzy-match-table"><thead><tr>
+            <th>Auswählen</th><th>Airtable-Eintrag (ohne KV)</th><th>ERP-Eintrag (fehlt in Airtable)</th><th>Score</th>
+            </tr></thead><tbody>`;
         suggestions.forEach((match, index) => {
-            // Daten für das Checkbox-Attribut vorbereiten
             const matchData = {
-                // Wir verwenden jetzt den Projekttitel als ID, da er im Backend-Map-Key verwendet wird
                 airtable_id: match.airtable.Projekttitel, 
                 erp_kv: match.erp['KV-Nummer']
             };
-            
             tableHTML += `
                 <tr>
-                    <td>
-                        <input type="checkbox" class="fuzzy-checkbox" 
-                               id="match-${index}" 
-                               data-match='${JSON.stringify(matchData)}'>
-                    </td>
-                    <td>
-                        <strong>Titel:</strong> ${match.airtable.Projekttitel}<br>
-                        <strong>Kunde:</strong> ${match.airtable.Auftraggeber}<br>
-                        <strong>Betrag:</strong> ${formatCurrency(match.airtable.Agenturleistung_netto_cleaned)}
-                    </td>
-                    <td>
-                        <strong>Titel:</strong> ${match.erp.Titel}<br>
-                        <strong>Kunde:</strong> ${match.erp['Projekt Etat Kunde Name']}<br>
-                        <strong>Betrag:</strong> ${formatCurrency(match.erp['Agenturleistung netto'])}<br>
-                        <strong>KV:</strong> ${match.erp['KV-Nummer']}
-                    </td>
+                    <td><input type="checkbox" class="fuzzy-checkbox" id="match-${index}" data-match='${JSON.stringify(matchData)}'></td>
+                    <td><strong>Titel:</strong> ${match.airtable.Projekttitel}<br><strong>Kunde:</strong> ${match.airtable.Auftraggeber}<br><strong>Betrag:</strong> ${formatCurrency(match.airtable.Agenturleistung_netto_cleaned)}</td>
+                    <td><strong>Titel:</strong> ${match.erp.Titel}<br><strong>Kunde:</strong> ${match.erp['Projekt Etat Kunde Name']}<br><strong>Betrag:</strong> ${formatCurrency(match.erp['Agenturleistung netto'])}<br><strong>KV:</strong> ${match.erp['KV-Nummer']}</td>
                     <td><strong>${(match.score * 100).toFixed(0)}%</strong></td>
-                </tr>
-            `;
+                </tr>`;
         });
-
         tableHTML += '</tbody></table>';
         fuzzyMatchDiv.innerHTML = tableHTML;
     }
@@ -290,25 +255,122 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
     function renderFinalReports(reports) {
         const format = (data) => `
             <table class="report-table">
-                <thead>
-                    <tr>
-                        <th>Kategorie</th>
-                        <th>Zugewiesener Betrag (Netto)</th>
-                    </tr>
-                </thead>
+                <thead><tr><th>Kategorie</th><th>Zugewiesener Betrag (Netto)</th></tr></thead>
                 <tbody>
                     ${data.map(item => `
-                        <tr>
-                            <td>${item.name}</td>
-                            <td>${formatCurrency(item.amount)}</td>
-                        </tr>
+                        <tr><td>${item.name}</td><td>${formatCurrency(item.amount)}</td></tr>
                     `).join('')}
                 </tbody>
-            </table>
-        `;
-
+            </table>`;
         teamReportDiv.innerHTML = format(reports.teamReport);
         personReportDiv.innerHTML = format(reports.personReport);
+    }
+    
+    // ====== RENDER-FUNKTIONEN (NEU) ======
+    
+    function renderReconciliationReport(reco) {
+        // 1. Finanz-Zusammenfassung
+        recoTotalsDiv.innerHTML = `
+            <div class="reco-section">
+                <h4>Finanz-Zusammenfassung</h4>
+                <div class="reco-totals-grid">
+                    <div class="reco-totals-item">Gesamtsumme ERP <strong>${formatCurrency(reco.totals.totalERP)}</strong></div>
+                    <div class="reco-totals-item">Gesamtsumme Airtable <strong>${formatCurrency(reco.totals.totalAirtable)}</strong></div>
+                    <div class="reco-totals-item">Davon Zugeordnet <strong>${formatCurrency(reco.totals.totalReconciled)}</strong></div>
+                    <div class="reco-totals-item">Fehlende ERP-Beträge <strong>${formatCurrency(reco.totals.totalUnreconciledERP)}</strong></div>
+                </div>
+            </div>`;
+        
+        // 2. Bericht 1: KVs zum Aktualisieren
+        recoKVsToUpdateDiv.innerHTML = renderRecoTable(
+            'To-Do: Beträge in Airtable aktualisieren',
+            ['KV-Nummer', 'Projekttitel', 'Airtable-Betrag', 'ERP-Betrag (NEU)'],
+            reco.kvsToUpdate.map(row => `
+                <tr>
+                    <td>${row.kv}</td>
+                    <td>${row.title}</td>
+                    <td class="amount">${formatCurrency(row.airtableAmount)}</td>
+                    <td class="amount"><strong>${formatCurrency(row.erpAmount)}</strong></td>
+                </tr>
+            `)
+        );
+        
+        // 3. Bericht 4: Nicht zugeordnete KVs (Fehlen in Airtable)
+        recoUnmatchedERPDiv.innerHTML = renderRecoTable(
+            'To-Do: Diese KVs fehlen in Airtable',
+            ['KV-Nummer', 'ERP-Titel', 'ERP-Betrag'],
+            reco.unmatchedERP.map(row => `
+                <tr>
+                    <td>${row.kv}</td>
+                    <td>${row.erpTitle}</td>
+                    <td class="amount">${formatCurrency(row.erpAmount)}</td>
+                </tr>
+            `)
+        );
+
+        // 4. Bericht 5: Nicht zugeordnete Airtable-Einträge
+        recoUnmatchedAirtableDiv.innerHTML = renderRecoTable(
+            'Info: Diese Airtable-Einträge fehlen im ERP',
+            ['Airtable-Titel', 'Airtable-Betrag', 'Grund'],
+            reco.unmatchedAirtable.map(row => `
+                <tr>
+                    <td>${row.airtableTitle}</td>
+                    <td class="amount">${formatCurrency(row.airtableAmount)}</td>
+                    <td>${row.reason}</td>
+                </tr>
+            `)
+        );
+
+        // 5. Bericht 3: Erfolgreich zugeordnete Fuzzy-Matches
+        recoFuzzyMatchedDiv.innerHTML = renderRecoTable(
+            'Info: Erfolgreich per Fuzzy-Match zugeordnet',
+            ['Airtable-Titel', 'ERP-KV', 'ERP-Titel', 'Betrag'],
+            reco.fuzzyMatched.map(row => `
+                <tr>
+                    <td>${row.airtableTitle}</td>
+                    <td>${row.erpKV}</td>
+                    <td>${row.erpTitle}</td>
+                    <td class="amount">${formatCurrency(row.erpAmount)}</td>
+                </tr>
+            `)
+        );
+        
+        // 6. Bericht 2: Manuell zu prüfende Sammel-KVs
+        recoSammelKVsDiv.innerHTML = renderRecoTable(
+            'Manuell zu prüfen: Airtable Sammel-KVs',
+            ['Airtable-Titel', 'KV-Nummern (Airtable)', 'Airtable-Betrag'],
+            reco.sammelKVs.map(row => `
+                <tr>
+                    <td>${row.airtableTitle}</td>
+                    <td>${row.airtableKVs}</td>
+                    <td class="amount">${formatCurrency(row.airtableAmount)}</td>
+                </tr>
+            `)
+        );
+    }
+    
+    /**
+     * Hilfsfunktion zum Erstellen der HTML-Tabellen für den Abgleichs-Bericht
+     */
+    function renderRecoTable(title, headers, rows) {
+        if (!rows || rows.length === 0) {
+            return `<div class="reco-section"><h4>${title}</h4><p>Keine Einträge.</p></div>`;
+        }
+        
+        // Fügt 'amount' Klasse zu Spaltenüberschriften hinzu, die 'Betrag' enthalten
+        const headerHTML = headers.map(h => 
+            h.toLowerCase().includes('betrag') ? `<th class="amount">${h}</th>` : `<th>${h}</th>`
+        ).join('');
+        
+        return `
+            <div class="reco-section">
+                <h4>${title} (${rows.length})</h4>
+                <table class="reco-table">
+                    <thead><tr>${headerHTML}</tr></thead>
+                    <tbody>${rows.join('')}</tbody>
+                </table>
+            </div>
+        `;
     }
 
     function formatCurrency(value) {
@@ -316,4 +378,4 @@ const WORKER_URL = 'https://tekin-reco-backend-tool.tekin-6af.workers.dev';     
         if (isNaN(num)) return 'N/A';
         return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
     }
-}; // ENDE DES window.onload WRAPPERS
+};
