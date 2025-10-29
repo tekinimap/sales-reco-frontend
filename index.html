@@ -1,1 +1,65 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Reconciliation Tool</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/read-excel-file/5.7.1/read-excel-file.min.js"></script>
+</head>
+<body>
 
+    <header>
+        <h1>Sales Reconciliation Tool</h1>
+        <p>Gleiche Airtable-Exporte mit ERP-Auszügen ab.</p>
+    </header>
+
+    <main>
+        <div class="card" id="upload-card">
+            <h2>1. Dateien hochladen</h2>
+            <p>Bitte lade beide Exporte hoch. Die Verarbeitung findet sicher im Backend statt.</p>
+            
+            <div class="file-input-group">
+                <label for="airtable-file">Airtable-Export (.csv)</label>
+                <input type="file" id="airtable-file" accept=".csv">
+            </div>
+            
+            <div class="file-input-group">
+                <label for="erp-file">ERP-Export (.csv oder .xlsx)</label>
+                <input type="file" id="erp-file" accept=".csv,.xlsx">
+            </div>
+            
+            <button id="analyze-button">1. Abgleich starten</button>
+            <div id="loader" class="loader" style="display: none;"></div>
+            <div id="error-message" class="error"></div>
+        </div>
+
+        <div class="card" id="summary-results-card" style="display: none;">
+            <h2>2. Ergebnisse des 1:1 Abgleichs</h2>
+            <div id="summary-results"></div>
+        </div>
+
+        <div class="card" id="fuzzy-match-card" style="display: none;">
+            <h2>3. Manuelle Zuordnung (Fuzzy Match)</h2>
+            <p>Bitte prüfe die Vorschläge. Wähle alle korrekten Zuordnungen aus und fahre mit Schritt 4 fort.</p>
+            <div id="fuzzy-match-area">
+                </div>
+            <button id="report-button" style="display: none;">2. Finale Berichte generieren</button>
+        </div>
+
+        <div class="card" id="final-report-card" style="display: none;">
+            <h2>4. Finale Berichte</h2>
+            <p>Basierend auf deiner Zuordnung sind hier die finalen Erfolgs-Reportings (Beträge vom ERP, Prozente von Airtable).</p>
+            
+            <h3>Team-Sales-Erfolg</h3>
+            <div id="team-report-area"></div>
+            
+            <h3>Personen-Sales-Erfolg</h3>
+            <div id="person-report-area"></div>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
