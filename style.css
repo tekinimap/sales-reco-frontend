@@ -119,3 +119,57 @@ td {
     font-weight: 600;
     text-align: right;
 }
+.reco-section {
+    margin-top: 25px;
+    border-top: 1px solid #eee;
+    padding-top: 20px;
+}
+
+.reco-section h4 {
+    margin-top: 0;
+    color: #003e9c;
+}
+
+.reco-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 12px;
+}
+
+.reco-table th, 
+.reco-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+}
+
+.reco-table th {
+    background-color: #f9f9f9;
+}
+
+.reco-table td.amount,
+.reco-table th.amount {
+    text-align: right;
+    font-family: monospace;
+}
+
+.reco-totals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.reco-totals-item {
+    background: #f9f9f9;
+    padding: 15px;
+    border-radius: 5px;
+    border: 1px solid #eee;
+}
+
+.reco-totals-item strong {
+    display: block;
+    font-size: 1.5em;
+    color: #0052cc;
+    font-family: monospace;
+}
