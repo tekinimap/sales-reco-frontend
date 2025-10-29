@@ -41,25 +41,22 @@
         <div class="card" id="fuzzy-match-card" style="display: none;">
             <h2>3. Manuelle Zuordnung (Fuzzy Match)</h2>
             <p>Bitte prüfe die Vorschläge. Wähle alle korrekten Zuordnungen aus und fahre mit Schritt 4 fort.</p>
-            <div id="fuzzy-match-area">
-                </div>
+            <div id="fuzzy-match-area"></div>
             <button id="report-button" style="display: none;">2. Finale Berichte generieren</button>
         </div>
 
         <div class="card" id="final-report-card" style="display: none;">
             <h2>4. Finale Berichte</h2>
             <p>Basierend auf deiner Zuordnung sind hier die finalen Erfolgs-Reportings (Beträge vom ERP, Prozente von Airtable).</p>
-            
             <h3>Team-Sales-Erfolg</h3>
             <div id="team-report-area"></div>
-            
             <h3>Personen-Sales-Erfolg</h3>
             <div id="person-report-area"></div>
         </div>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/read-excel-file@5.7.1/dist/read-excel-file.min.js" defer></script>
+    <script src="vendor/papaparse.min.js" defer></script>
+    <script src="vendor/read-excel-file.min.js" defer></script>
 
     <script src="script.js" defer></script>
 </body>
