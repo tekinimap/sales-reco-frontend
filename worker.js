@@ -358,89 +358,6 @@ function buildReconciliationReport_v7(airtableRows = [], erpRows = []) {
   };
 }
 
-const DEFAULT_FINAL_REPORTS = {
-  teamReport: [],
-  personReport: [],
-};
-
-/**
- * Baut das finale Reporting-Payload. Bis spezifische Logik vorliegt,
- * liefern wir leere Arrays, damit das Frontend stabil rendert.
- *
- * @returns {{teamReport: Array<object>, personReport: Array<object>}}
- */
-function buildFinalReports_v7() {
-  return { ...DEFAULT_FINAL_REPORTS };
-}
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-function createResponse(body, init, headers) {
-  if (typeof Response !== "undefined") {
-    return new Response(body, { ...init, headers });
-  }
-
-  return {
-    status: init?.status ?? 200,
-    headers,
-    body,
-  };
-}
-
-function jsonResponse(body, init = {}) {
-  const headers = {
-    ...CORS_HEADERS,
-    "Content-Type": "application/json;charset=UTF-8",
-    ...(init.headers || {}),
-  };
-  return createResponse(JSON.stringify(body), init, headers);
-}
-
-function errorResponse(status, message, details) {
-  return jsonResponse({ error: message, details }, { status });
-}
-
-async function handleReportRequest(request) {
-  let payload;
-  try {
-    payload = await request.json();
-  } catch (error) {
-    return errorResponse(400, "Ungültige JSON-Payload", { message: error?.message });
-  }
-
-  if (!payload || !Array.isArray(payload.airtableData) || !Array.isArray(payload.erpData)) {
-    return errorResponse(400, "Erwarte 'airtableData' und 'erpData' als Arrays");
-  }
-
-  const reconciliation = buildReconciliationReport_v7(payload.airtableData, payload.erpData);
-  const finalReports = buildFinalReports_v7();
-
-  return jsonResponse({ reconciliation, finalReports }, { status: 200 });
-}
-
-async function handleRequest(request) {
-  const { method } = request;
-  if (method === "OPTIONS") {
-    return createResponse(null, { status: 204 }, { ...CORS_HEADERS });
-  }
-
-  const url = new URL(request.url);
-
-  if (method === "POST" && url.pathname === "/report") {
-    return handleReportRequest(request);
-  }
-
-  if (method === "GET" && (url.pathname === "/" || url.pathname === "")) {
-    return jsonResponse({ ok: true, message: "Sales reconciliation worker" });
-  }
-
-  return errorResponse(404, "Nicht gefunden");
-}
-
 const exported = {
   normalizeProjectKey,
   cleanAirtableCurrency,
@@ -448,18 +365,7 @@ const exported = {
   cleanAndSegmentAirtable_v7,
   segmentErpData_v7,
   buildReconciliationReport_v7,
-  buildFinalReports_v7,
-  handleRequest,
-  handleReportRequest,
-  jsonResponse,
-  errorResponse,
 };
-
-if (typeof addEventListener === "function") {
-  addEventListener("fetch", (event) => {
-    event.respondWith(handleRequest(event.request));
-  });
-}
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = exported;
