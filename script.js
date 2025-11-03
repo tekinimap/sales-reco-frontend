@@ -41,6 +41,23 @@ window.onload = function() {
     // Event Listener (nur noch für Report-Button)
     reportButton.addEventListener('click', handleReport);
 
+    const AIRTABLE_HEADER_ALIASES = {
+        'Projektnummer': ['Projektnummer', 'Projekt-Nr.', 'Projekt Nr.', 'Projektnr', 'Projekt_Nr'],
+        'Projekttitel': ['Projekttitel', 'Projekt Titel', 'Projektname'],
+        'Agenturleistung (netto)': ['Agenturleistung (netto)', 'Agenturleistung netto', 'Agenturleistung Netto']
+    };
+
+    const ERP_HEADER_ALIASES = {
+        'Projekt Projektnummer': ['Projekt Projektnummer', 'Projektnummer', 'Projekt-Nr.', 'Projekt Nr.', 'Projekt_Nr'],
+        'KV-Nummer': ['KV-Nummer', 'KV Nummer', 'KV-Nr.', 'KV Nr.', 'KV_Nr']
+    };
+
+    const REQUIRED_AIRTABLE_COLUMNS = ['Projektnummer', 'Agenturleistung (netto)'];
+    const REQUIRED_ERP_COLUMNS = ['Projekt Projektnummer'];
+
+    const mapAirtableHeader = createHeaderMapper(AIRTABLE_HEADER_ALIASES);
+    const mapErpHeader = createHeaderMapper(ERP_HEADER_ALIASES);
+
 
     /**
      * Parsed die hochgeladenen Dateien.
@@ -52,38 +69,64 @@ window.onload = function() {
         const airtableFile = airtableFileInput.files[0];
         const erpFile = erpFileInput.files[0];
         if (!airtableFile || !erpFile) { errorMessage.textContent = 'Bitte beide Dateien auswählen.'; return false; }
-        // WICHTIG: Sicherstellen, dass die NEUE Airtable-Datei verwendet wird
-        if (airtableFile.name !== 'Airtable_102025.csv') {
-             errorMessage.textContent = 'Falsche Airtable-Datei. Bitte "Airtable_102025.csv" hochladen.';
-             airtableFileInput.value = ''; // Input zurücksetzen
-             return false;
-        }
 
         try {
-            // Airtable CSV
             parsedAirtableData = await new Promise((resolve, reject) => {
-                Papa.parse(airtableFile, { header: true, skipEmptyLines: 'greedy', encoding: "ISO-8859-1",
-                    complete: (r) => resolve(r.data.filter(row => row && Object.values(row).some(val => val !== null && val !== ''))),
+                Papa.parse(airtableFile, {
+                    header: true,
+                    skipEmptyLines: 'greedy',
+                    encoding: 'ISO-8859-1',
+                    transformHeader: mapAirtableHeader,
+                    complete: (results) => {
+                        try {
+                            resolve(filterParsedRows(results.data || []));
+                        } catch (err) {
+                            reject(err);
+                        }
+                    },
                     error: (e) => reject(new Error(`Airtable CSV-Fehler: ${e.message}`))
                 });
             });
-            // ERP (Excel or CSV)
-            if (erpFile.name.endsWith('.xlsx')) {
+
+            if (!parsedAirtableData || parsedAirtableData.length === 0) {
+                throw new Error('Airtable-Datei ist leer oder konnte nicht geparst werden.');
+            }
+
+            validateColumns(parsedAirtableData, REQUIRED_AIRTABLE_COLUMNS, 'Airtable');
+
+            if (erpFile.name && erpFile.name.toLowerCase().endsWith('.xlsx')) {
                 const rows = await readXlsxFile(erpFile);
                 if (!rows || rows.length < 2) throw new Error('ERP Excel-Datei leer oder nur Header.');
-                const headers = rows[0].map(h => String(h));
-                parsedErpData = rows.slice(1).map(row => headers.reduce((obj, h, i) => (obj[h] = row[i], obj), {}))
-                                  .filter(row => row && Object.values(row).some(val => val !== null && val !== undefined && val !== ''));
+                const headers = rows[0].map(cell => mapErpHeader(String(cell ?? '')));
+                const erpObjects = rows.slice(1).map(row => mapArrayRowToObject(headers, row));
+                parsedErpData = filterParsedRows(erpObjects);
             } else {
                 parsedErpData = await new Promise((resolve, reject) => {
-                    Papa.parse(erpFile, { header: true, skipEmptyLines: 'greedy',
-                        complete: (r) => resolve(r.data.filter(row => row && Object.values(row).some(val => val !== null && val !== ''))),
+                    Papa.parse(erpFile, {
+                        header: true,
+                        skipEmptyLines: 'greedy',
+                        transformHeader: mapErpHeader,
+                        complete: (results) => {
+                            try {
+                                resolve(filterParsedRows(results.data || []));
+                            } catch (err) {
+                                reject(err);
+                            }
+                        },
                         error: (e) => reject(new Error(`ERP CSV-Fehler: ${e.message}`))
                     });
                 });
             }
-             if (!parsedAirtableData || parsedAirtableData.length === 0) throw new Error('Airtable-Datei ist leer oder konnte nicht geparst werden.');
-             if (!parsedErpData || parsedErpData.length === 0) throw new Error('ERP-Datei ist leer oder konnte nicht geparst werden.');
+
+            if (!parsedErpData || parsedErpData.length === 0) {
+                throw new Error('ERP-Datei ist leer oder konnte nicht geparst werden.');
+            }
+
+            validateColumns(parsedErpData, REQUIRED_ERP_COLUMNS, 'ERP');
+
+            normalizeProjectNumbers(parsedAirtableData, ['Projektnummer']);
+            normalizeProjectNumbers(parsedErpData, ['Projekt Projektnummer', 'KV-Nummer']);
+
             return true;
         } catch (error) {
             errorMessage.textContent = `Fehler beim Parsen: ${error.message || error}`;
@@ -226,6 +269,87 @@ window.onload = function() {
          if (!rows || rows.length === 0) return `<div class="reco-section"><h4>${escapeHtml(title)}</h4><p>Keine Einträge.</p></div>`;
         const headerHTML = headers.map(h => h.toLowerCase().includes('betrag') || h.toLowerCase().includes('summe') ? `<th class="amount">${escapeHtml(h)}</th>` : `<th>${escapeHtml(h)}</th>`).join('');
         return `<div class="reco-section"><h4>${escapeHtml(title)} (${rows.length})</h4><table class="reco-table"><thead><tr>${headerHTML}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+    }
+
+    function filterParsedRows(rows) {
+         if (!Array.isArray(rows)) return [];
+         return rows.filter(row => row && typeof row === 'object' && !isRowEmpty(row));
+    }
+
+    function isRowEmpty(row) {
+         if (!row || typeof row !== 'object') return true;
+         return !Object.values(row).some(hasMeaningfulValue);
+    }
+
+    function hasMeaningfulValue(value) {
+         if (value === null || value === undefined) return false;
+         if (typeof value === 'string') return value.replace(/\u00A0/g, ' ').trim() !== '';
+         if (typeof value === 'number') return !Number.isNaN(value);
+         return true;
+    }
+
+    function sanitizeHeader(header) {
+         if (header === null || header === undefined) return '';
+         return String(header).replace(/^\uFEFF/, '').replace(/\u00A0/g, ' ').trim();
+    }
+
+    function createHeaderMapper(aliases) {
+         const aliasMap = new Map();
+         Object.entries(aliases || {}).forEach(([canonical, list]) => {
+              const canonicalKey = String(canonical);
+              aliasMap.set(canonicalKey.toLowerCase(), canonicalKey);
+              (list || []).forEach(alias => aliasMap.set(String(alias).toLowerCase(), canonicalKey));
+         });
+         return (header) => {
+              const sanitized = sanitizeHeader(header);
+              if (!sanitized) return sanitized;
+              const mapped = aliasMap.get(sanitized.toLowerCase());
+              return mapped || sanitized;
+         };
+    }
+
+    function mapArrayRowToObject(headers, row) {
+         const source = Array.isArray(row) ? row : [];
+         return headers.reduce((obj, header, index) => {
+              if (!header) return obj;
+              obj[header] = source[index];
+              return obj;
+         }, {});
+    }
+
+    function validateColumns(rows, requiredColumns, datasetLabel) {
+         const available = new Set();
+         (rows || []).forEach(row => {
+              if (!row || typeof row !== 'object') return;
+              Object.keys(row).forEach(key => {
+                   if (key) available.add(key);
+              });
+         });
+         const missing = (requiredColumns || []).filter(col => !available.has(col));
+         if (missing.length > 0) {
+              throw new Error(`${datasetLabel}: Fehlende Pflichtspalten (${missing.join(', ')})`);
+         }
+    }
+
+    function normalizeProjectNumbers(rows, keys) {
+         if (!Array.isArray(rows)) return;
+         rows.forEach(row => {
+              if (!row || typeof row !== 'object') return;
+              (keys || []).forEach(key => {
+                   if (Object.prototype.hasOwnProperty.call(row, key)) {
+                        row[key] = normalizeProjectKey(row[key]);
+                   }
+              });
+         });
+    }
+
+    function normalizeProjectKey(value) {
+         return (value ?? '')
+             .toString()
+             .replace(/\u00A0/g, ' ')
+             .replace(/[\t\r\n]+/g, ' ')
+             .replace(/\s+/g, ' ')
+             .trim();
     }
 
     // Hilfsfunktion für Währungsformatierung
