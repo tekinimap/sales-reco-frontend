@@ -66,12 +66,14 @@ window.onload = function() {
         errorMessage.textContent = '';
         parsedAirtableData = null;
         parsedErpData = null;
+        let airtableHeaders = [];
+        let erpHeaders = [];
         const airtableFile = airtableFileInput.files[0];
         const erpFile = erpFileInput.files[0];
         if (!airtableFile || !erpFile) { errorMessage.textContent = 'Bitte beide Dateien auswählen.'; return false; }
 
         try {
-            parsedAirtableData = await new Promise((resolve, reject) => {
+            const airtableResult = await new Promise((resolve, reject) => {
                 Papa.parse(airtableFile, {
                     header: true,
                     skipEmptyLines: 'greedy',
@@ -79,7 +81,11 @@ window.onload = function() {
                     transformHeader: mapAirtableHeader,
                     complete: (results) => {
                         try {
-                            resolve(filterParsedRows(results.data || []));
+                            const rows = filterParsedRows(results.data || []);
+                            const headers = Array.isArray(results.meta && results.meta.fields)
+                                ? (results.meta.fields || []).filter(Boolean)
+                                : deriveHeadersFromRows(rows);
+                            resolve({ rows, headers });
                         } catch (err) {
                             reject(err);
                         }
@@ -88,11 +94,19 @@ window.onload = function() {
                 });
             });
 
+            parsedAirtableData = airtableResult.rows;
+            airtableHeaders = airtableResult.headers;
+
             if (!parsedAirtableData || parsedAirtableData.length === 0) {
                 throw new Error('Airtable-Datei ist leer oder konnte nicht geparst werden.');
             }
 
-            validateColumns(parsedAirtableData, REQUIRED_AIRTABLE_COLUMNS, 'Airtable');
+            validateColumns({
+                rows: parsedAirtableData,
+                headers: airtableHeaders,
+                requiredColumns: REQUIRED_AIRTABLE_COLUMNS,
+                datasetLabel: 'Airtable'
+            });
 
             if (erpFile.name && erpFile.name.toLowerCase().endsWith('.xlsx')) {
                 const rows = await readXlsxFile(erpFile);
@@ -100,15 +114,20 @@ window.onload = function() {
                 const headers = rows[0].map(cell => mapErpHeader(String(cell ?? '')));
                 const erpObjects = rows.slice(1).map(row => mapArrayRowToObject(headers, row));
                 parsedErpData = filterParsedRows(erpObjects);
+                erpHeaders = deriveHeadersFromRows(parsedErpData, headers);
             } else {
-                parsedErpData = await new Promise((resolve, reject) => {
+                const erpResult = await new Promise((resolve, reject) => {
                     Papa.parse(erpFile, {
                         header: true,
                         skipEmptyLines: 'greedy',
                         transformHeader: mapErpHeader,
                         complete: (results) => {
                             try {
-                                resolve(filterParsedRows(results.data || []));
+                                const rows = filterParsedRows(results.data || []);
+                                const parsedHeaders = Array.isArray(results.meta && results.meta.fields)
+                                    ? (results.meta.fields || []).filter(Boolean)
+                                    : deriveHeadersFromRows(rows);
+                                resolve({ rows, headers: parsedHeaders });
                             } catch (err) {
                                 reject(err);
                             }
@@ -116,13 +135,20 @@ window.onload = function() {
                         error: (e) => reject(new Error(`ERP CSV-Fehler: ${e.message}`))
                     });
                 });
+                parsedErpData = erpResult.rows;
+                erpHeaders = erpResult.headers;
             }
 
             if (!parsedErpData || parsedErpData.length === 0) {
                 throw new Error('ERP-Datei ist leer oder konnte nicht geparst werden.');
             }
 
-            validateColumns(parsedErpData, REQUIRED_ERP_COLUMNS, 'ERP');
+            validateColumns({
+                rows: parsedErpData,
+                headers: erpHeaders,
+                requiredColumns: REQUIRED_ERP_COLUMNS,
+                datasetLabel: 'ERP'
+            });
 
             normalizeProjectNumbers(parsedAirtableData, ['Projektnummer']);
             normalizeProjectNumbers(parsedErpData, ['Projekt Projektnummer', 'KV-Nummer']);
@@ -276,6 +302,17 @@ window.onload = function() {
          return rows.filter(row => row && typeof row === 'object' && !isRowEmpty(row));
     }
 
+    function deriveHeadersFromRows(rows, fallbackHeaders) {
+         const headerSet = new Set(Array.isArray(fallbackHeaders) ? fallbackHeaders.filter(Boolean) : []);
+         (rows || []).forEach(row => {
+              if (!row || typeof row !== 'object') return;
+              Object.keys(row).forEach(key => {
+                   if (key) headerSet.add(key);
+              });
+         });
+         return Array.from(headerSet);
+    }
+
     function isRowEmpty(row) {
          if (!row || typeof row !== 'object') return true;
          return !Object.values(row).some(hasMeaningfulValue);
@@ -293,18 +330,53 @@ window.onload = function() {
          return String(header).replace(/^\uFEFF/, '').replace(/\u00A0/g, ' ').trim();
     }
 
+    function normalizeKeyForComparison(key) {
+         const sanitized = sanitizeHeader(key);
+         if (!sanitized) return '';
+         return sanitized
+             .toLowerCase()
+             .normalize('NFKD')
+             .replace(/[\u0300-\u036f]/g, '')
+             .replace(/[\s\-_().,:;\/\\]+/g, '')
+             .replace(/€|eur/g, '')
+             .trim();
+    }
+
     function createHeaderMapper(aliases) {
-         const aliasMap = new Map();
+         const directAliasMap = new Map();
+         const normalizedAliasMap = new Map();
+
+         const registerAlias = (alias, canonicalKey) => {
+              const sanitizedAlias = sanitizeHeader(alias);
+              if (!sanitizedAlias) return;
+              directAliasMap.set(sanitizedAlias.toLowerCase(), canonicalKey);
+              const normalizedAlias = normalizeKeyForComparison(sanitizedAlias);
+              if (normalizedAlias) {
+                   normalizedAliasMap.set(normalizedAlias, canonicalKey);
+              }
+         };
+
          Object.entries(aliases || {}).forEach(([canonical, list]) => {
               const canonicalKey = String(canonical);
-              aliasMap.set(canonicalKey.toLowerCase(), canonicalKey);
-              (list || []).forEach(alias => aliasMap.set(String(alias).toLowerCase(), canonicalKey));
+              registerAlias(canonicalKey, canonicalKey);
+              (list || []).forEach(alias => registerAlias(alias, canonicalKey));
          });
+
          return (header) => {
               const sanitized = sanitizeHeader(header);
               if (!sanitized) return sanitized;
-              const mapped = aliasMap.get(sanitized.toLowerCase());
-              return mapped || sanitized;
+
+              const lower = sanitized.toLowerCase();
+              if (directAliasMap.has(lower)) {
+                   return directAliasMap.get(lower);
+              }
+
+              const normalized = normalizeKeyForComparison(sanitized);
+              if (normalized && normalizedAliasMap.has(normalized)) {
+                   return normalizedAliasMap.get(normalized);
+              }
+
+              return sanitized;
          };
     }
 
@@ -317,17 +389,52 @@ window.onload = function() {
          }, {});
     }
 
-    function validateColumns(rows, requiredColumns, datasetLabel) {
+    function validateColumns({ rows, headers, requiredColumns, datasetLabel }) {
          const available = new Set();
+         const availableNormalized = new Map();
+
+         const register = (key) => {
+              if (!key) return;
+              if (!available.has(key)) {
+                   available.add(key);
+              }
+              const normalized = normalizeKeyForComparison(key);
+              if (normalized && !availableNormalized.has(normalized)) {
+                   availableNormalized.set(normalized, key);
+              }
+         };
+
+         (Array.isArray(headers) ? headers : []).forEach(register);
+
          (rows || []).forEach(row => {
               if (!row || typeof row !== 'object') return;
-              Object.keys(row).forEach(key => {
-                   if (key) available.add(key);
-              });
+              Object.keys(row).forEach(register);
          });
-         const missing = (requiredColumns || []).filter(col => !available.has(col));
+
+         const normalizedKeys = Array.from(availableNormalized.keys());
+
+         const hasNormalizedMatch = (normalizedRequired) => {
+              if (!normalizedRequired) return false;
+              if (availableNormalized.has(normalizedRequired)) return true;
+              return normalizedKeys.some(candidate => {
+                   if (!candidate) return false;
+                   return candidate.includes(normalizedRequired) || normalizedRequired.includes(candidate);
+              });
+         };
+
+         const missing = (requiredColumns || []).filter(col => {
+              if (available.has(col)) return false;
+              const normalizedRequired = normalizeKeyForComparison(col);
+              return !hasNormalizedMatch(normalizedRequired);
+         });
+
          if (missing.length > 0) {
-              throw new Error(`${datasetLabel}: Fehlende Pflichtspalten (${missing.join(', ')})`);
+              const availableList = Array.from(new Set([
+                   ...Array.from(available.values()),
+                   ...normalizedKeys.map(key => availableNormalized.get(key)).filter(Boolean)
+              ]));
+              const availableInfo = availableList.length > 0 ? availableList.join(', ') : 'keine';
+              throw new Error(`${datasetLabel}: Fehlende Pflichtspalten (${missing.join(', ')}). Gefunden: ${availableInfo}`);
          }
     }
 
