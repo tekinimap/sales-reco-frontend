@@ -94,6 +94,15 @@ table {
     margin-top: 15px;
 }
 
+.report-empty {
+    margin-top: 15px;
+    padding: 12px;
+    background: #f4f6fb;
+    border: 1px solid #d8e1f3;
+    border-radius: 6px;
+    color: #3b4a6b;
+}
+
 th, td {
     border: 1px solid #ddd;
     padding: 10px;
@@ -118,6 +127,65 @@ td {
 .report-table td:last-child {
     font-weight: 600;
     text-align: right;
+}
+
+.bar-report {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 15px;
+}
+
+.bar-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 2fr) minmax(220px, 3fr);
+    gap: 12px;
+    align-items: center;
+}
+
+.bar-report.has-percentage .bar-row {
+    grid-template-columns: minmax(160px, 2fr) minmax(220px, 3fr) minmax(70px, auto);
+}
+
+.bar-label {
+    font-weight: 600;
+}
+
+.bar-meter {
+    position: relative;
+    background: #eef2fb;
+    border: 1px solid #d0dbf5;
+    border-radius: 999px;
+    height: 28px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    padding-right: 12px;
+}
+
+.bar-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, #4b7bec, #34ace0);
+    transition: width 0.3s ease;
+    z-index: 0;
+}
+
+.bar-value {
+    position: relative;
+    margin-left: auto;
+    font-family: monospace;
+    font-weight: 600;
+    color: #1d2d50;
+    z-index: 1;
+}
+
+.bar-percentage {
+    font-size: 0.9em;
+    color: #4a5a7a;
+    white-space: nowrap;
 }
 .reco-section {
     margin-top: 25px;

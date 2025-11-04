@@ -256,12 +256,147 @@ window.onload = function() {
 
     // Finale Berichte Renderer (kleine Anpassung für leere Berichte)
     function renderFinalReports_v7(finalReports) {
-        const format = (data, categoryLabel = 'Kategorie') => `
-            <table class="report-table"><thead><tr><th>${categoryLabel}</th><th>Zugewiesener Betrag (Netto)</th></tr></thead><tbody>
-                ${data && data.length > 0 ? data.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${formatCurrency(item.amount)}</td></tr>`).join('') : `<tr><td colspan="2">Keine Daten für diesen Bericht.</td></tr>`}
-            </tbody></table>`;
-        teamReportDiv.innerHTML = format(finalReports.teamReport, 'Team');
-        personReportDiv.innerHTML = format(finalReports.personReport, 'Person');
+        const teamItems = normalizeFinalReportCollection(finalReports?.teamReport, 'Team');
+        const personItems = normalizeFinalReportCollection(finalReports?.personReport, 'Person');
+
+        teamReportDiv.innerHTML = renderBarReport(teamItems, 'Team');
+        personReportDiv.innerHTML = renderBarReport(personItems, 'Person');
+    }
+
+    function renderBarReport(items, label) {
+        if (!items || items.length === 0) {
+            return `<div class="report-empty">Keine Daten für diesen Bericht.</div>`;
+        }
+
+        const maxAmount = Math.max(...items.map(item => Math.abs(item.amount)));
+        const safeMax = Number.isFinite(maxAmount) && maxAmount > 0 ? maxAmount : 0;
+
+        const hasPercentage = items.some(item => item.percentage != null);
+
+        const rows = items.map(item => {
+            const width = safeMax > 0 ? Math.min(100, Math.round((Math.abs(item.amount) / safeMax) * 100)) : 0;
+            const percentageText = item.percentage != null ? `${formatPercentage(item.percentage)}` : '';
+            const amountText = formatCurrency(item.amount);
+
+            return `
+                <div class="bar-row">
+                    <div class="bar-label">${escapeHtml(item.name || label)}</div>
+                    <div class="bar-meter">
+                        <div class="bar-fill" style="width: ${width}%"></div>
+                        <span class="bar-value">${amountText}</span>
+                    </div>
+                    ${percentageText ? `<div class="bar-percentage">${percentageText}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+
+        const reportClass = hasPercentage ? 'bar-report has-percentage' : 'bar-report';
+        return `<div class="${reportClass}" aria-label="${escapeHtml(label)}-Report">${rows}</div>`;
+    }
+
+    function normalizeFinalReportCollection(reportData, fallbackLabel) {
+        if (!reportData) return [];
+
+        const collection = extractReportArray(reportData);
+        if (!collection || collection.length === 0) {
+            return [];
+        }
+
+        return collection
+            .map(item => normalizeReportItem(item, fallbackLabel))
+            .filter(item => item && item.name);
+    }
+
+    function extractReportArray(reportData) {
+        if (!reportData) return [];
+        if (Array.isArray(reportData)) return reportData;
+
+        const candidateKeys = ['items', 'data', 'rows', 'entries', 'list', 'breakdown', 'report', 'values', 'result', 'results'];
+        for (const key of candidateKeys) {
+            if (Array.isArray(reportData[key])) {
+                return reportData[key];
+            }
+        }
+
+        const numericEntries = Object.entries(reportData)
+            .filter(([key, value]) => isNumericValue(value) && !['total', 'sum', 'overall', 'grandTotal'].includes(key));
+        if (numericEntries.length > 0) {
+            return numericEntries.map(([key, value]) => ({ name: key, amount: value }));
+        }
+
+        return [];
+    }
+
+    function normalizeReportItem(rawItem, fallbackLabel) {
+        if (!rawItem || typeof rawItem !== 'object') {
+            return {
+                name: String(rawItem ?? fallbackLabel ?? ''),
+                amount: 0,
+                percentage: null
+            };
+        }
+
+        const name = rawItem.name || rawItem.label || rawItem.team || rawItem.person || rawItem.category || rawItem.key || rawItem.id || fallbackLabel || '';
+        const amount = parseNumericValue(rawItem.amount ?? rawItem.value ?? rawItem.total ?? rawItem.sum ?? rawItem.assignedAmount ?? rawItem.allocated ?? 0);
+        const percentage = parseNumericValue(rawItem.percentage ?? rawItem.percent ?? rawItem.share ?? null, true);
+
+        return {
+            name: String(name || fallbackLabel || ''),
+            amount,
+            percentage: Number.isFinite(percentage) ? percentage : null
+        };
+    }
+
+    function parseNumericValue(value, allowNull = false) {
+        if (value === null || value === undefined || value === '') {
+            return allowNull ? null : 0;
+        }
+
+        if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : (allowNull ? null : 0);
+        }
+
+        if (typeof value === 'string') {
+            const cleaned = value
+                .replace(/\u00A0/g, ' ')
+                .replace(/\s+/g, '')
+                .replace(/[^0-9,\-\.]/g, '')
+                .replace(/,(?=\d{1,2}$)/, '.')
+                .replace(/\.(?=.*\.)/g, '');
+            if (!cleaned) {
+                return allowNull ? null : 0;
+            }
+            const parsed = Number(cleaned);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+
+        return allowNull ? null : 0;
+    }
+
+    function isNumericValue(value) {
+        if (typeof value === 'number') {
+            return Number.isFinite(value);
+        }
+        if (typeof value === 'string') {
+            const hasDigits = /[0-9]/.test(value);
+            if (!hasDigits) return false;
+            const parsed = parseNumericValue(value);
+            return Number.isFinite(parsed);
+        }
+        return false;
+    }
+
+    function formatPercentage(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        const num = Number(value);
+        if (!Number.isFinite(num)) {
+            return '';
+        }
+        return `${num.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
     }
 
     // Hilfsfunktion für Tabellen-Rendering
