@@ -256,12 +256,407 @@ window.onload = function() {
 
     // Finale Berichte Renderer (kleine Anpassung für leere Berichte)
     function renderFinalReports_v7(finalReports) {
-        const format = (data, categoryLabel = 'Kategorie') => `
-            <table class="report-table"><thead><tr><th>${categoryLabel}</th><th>Zugewiesener Betrag (Netto)</th></tr></thead><tbody>
-                ${data && data.length > 0 ? data.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${formatCurrency(item.amount)}</td></tr>`).join('') : `<tr><td colspan="2">Keine Daten für diesen Bericht.</td></tr>`}
-            </tbody></table>`;
-        teamReportDiv.innerHTML = format(finalReports.teamReport, 'Team');
-        personReportDiv.innerHTML = format(finalReports.personReport, 'Person');
+        const teamItems = normalizeFinalReportCollection(finalReports?.teamReport, 'Team');
+        const personItems = normalizeFinalReportCollection(finalReports?.personReport, 'Person');
+
+        teamReportDiv.innerHTML = renderBarReport(teamItems, 'Team');
+        personReportDiv.innerHTML = renderBarReport(personItems, 'Person');
+    }
+
+    function renderBarReport(items, label) {
+        if (!items || items.length === 0) {
+            return `<div class="report-empty">Keine Daten für diesen Bericht.</div>`;
+        }
+
+        const maxAmount = Math.max(...items.map(item => Math.abs(item.amount)));
+        const safeMax = Number.isFinite(maxAmount) && maxAmount > 0 ? maxAmount : 0;
+
+        const hasPercentage = items.some(item => item.percentage != null);
+
+        const rows = items.map(item => {
+            const width = safeMax > 0 ? Math.min(100, Math.round((Math.abs(item.amount) / safeMax) * 100)) : 0;
+            const percentageText = item.percentage != null ? `${formatPercentage(item.percentage)}` : '';
+            const amountText = formatCurrency(item.amount);
+
+            return `
+                <div class="bar-row">
+                    <div class="bar-label">${escapeHtml(item.name || label)}</div>
+                    <div class="bar-meter">
+                        <div class="bar-fill" style="width: ${width}%"></div>
+                        <span class="bar-value">${amountText}</span>
+                    </div>
+                    ${percentageText ? `<div class="bar-percentage">${percentageText}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+
+        const reportClass = hasPercentage ? 'bar-report has-percentage' : 'bar-report';
+        return `<div class="${reportClass}" aria-label="${escapeHtml(label)}-Report">${rows}</div>`;
+    }
+
+    function normalizeFinalReportCollection(reportData, fallbackLabel) {
+        if (!reportData) return [];
+
+        const collection = extractReportArray(reportData, fallbackLabel, new Set());
+        if (!collection || collection.length === 0) {
+            return [];
+        }
+
+        return collection
+            .map(item => normalizeReportItem(item, fallbackLabel))
+            .filter(item => item && item.name);
+    }
+
+    function extractReportArray(reportData, fallbackLabel, visited) {
+        if (!reportData) return [];
+        if (visited && visited.has(reportData)) return [];
+
+        const coerceTabular = (rows, source) => coerceTabularArray(rows, source || reportData, fallbackLabel);
+
+        if (Array.isArray(reportData)) {
+            return coerceTabular(reportData);
+        }
+
+        if (reportData && typeof reportData === 'object') {
+            if (visited) {
+                visited.add(reportData);
+            }
+
+            if (Array.isArray(reportData.rows) || Array.isArray(reportData.data)) {
+                const primaryRows = Array.isArray(reportData.rows) ? reportData.rows : reportData.data;
+                return coerceTabular(primaryRows, reportData);
+            }
+
+            const candidateKeys = [
+                'items', 'entries', 'list', 'breakdown', 'report', 'values', 'result', 'results',
+                'records', 'collection', 'table', 'tableData', 'dataset', 'details', 'elements',
+                'byTeam', 'teams', 'byPerson', 'people', 'groups', 'grouped', 'members'
+            ];
+            for (const key of candidateKeys) {
+                if (!Object.prototype.hasOwnProperty.call(reportData, key)) continue;
+                const candidate = reportData[key];
+                if (Array.isArray(candidate)) {
+                    return coerceTabular(candidate, reportData);
+                }
+                if (candidate && typeof candidate === 'object') {
+                    const nested = extractReportArray(candidate, fallbackLabel, visited);
+                    if (nested.length > 0) {
+                        return nested;
+                    }
+                }
+            }
+
+            if (Array.isArray(reportData.headers) && Array.isArray(reportData.rows)) {
+                return coerceTabular(reportData.rows, reportData);
+            }
+
+            const summaryKeys = ['total', 'sum', 'overall', 'grandtotal', 'totals', 'summe', 'gesamtsumme', 'gesamt'];
+            const excludedKeys = ['headers', 'columns', 'fields', 'totals', 'summary', 'meta', 'metadata', 'title', 'type', 'unit', 'units', 'currency'];
+
+            const nestedEntries = Object.entries(reportData)
+                .filter(([key, value]) => {
+                    if (excludedKeys.includes(key)) return false;
+                    if (value === null || value === undefined) return false;
+                    const normalizedKey = normalizeKeyForComparison(key);
+                    if (normalizedKey && summaryKeys.some(summary => normalizedKey === summary || normalizedKey.startsWith(summary))) {
+                        return false;
+                    }
+                    return true;
+                });
+
+            const arrayEntry = nestedEntries.find(([, value]) => Array.isArray(value));
+            if (arrayEntry) {
+                return coerceTabular(arrayEntry[1], reportData);
+            }
+
+            const objectValueEntries = nestedEntries
+                .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value));
+            if (objectValueEntries.length > 0) {
+                const aggregated = [];
+                for (const [key, value] of objectValueEntries) {
+                    const nested = extractReportArray(value, fallbackLabel, visited);
+                    if (nested.length > 0) {
+                        nested.forEach(item => {
+                            if (item && typeof item === 'object') {
+                                const normalizedName = normalizeKeyForComparison(item.name || '');
+                                if (!item.name || isGenericLabel(normalizedName)) {
+                                    aggregated.push({ ...item, name: String(key) });
+                                } else {
+                                    aggregated.push(item);
+                                }
+                            } else {
+                                aggregated.push(item);
+                            }
+                        });
+                        continue;
+                    }
+                    aggregated.push({ name: key, ...value });
+                }
+                if (aggregated.length > 0) {
+                    return aggregated;
+                }
+            }
+
+            const numericEntries = nestedEntries
+                .filter(([key, value]) => isNumericValue(value));
+            if (numericEntries.length > 0) {
+                return numericEntries.map(([key, value]) => ({ name: key, amount: value }));
+            }
+        }
+
+        return [];
+    }
+
+    function coerceTabularArray(rows, sourceData, fallbackLabel) {
+        if (!Array.isArray(rows)) return [];
+        if (rows.length === 0) return [];
+
+        const headers = inferHeaders(sourceData) || inferHeadersFromRows(rows);
+        let dataRows = rows;
+
+        if (headers && headers.length > 0 && Array.isArray(rows[0]) && headers.every((_, idx) => idx < rows[0].length)) {
+            if (rows.length > 0 && isHeaderRow(rows[0], headers)) {
+                dataRows = rows.slice(1);
+            }
+        }
+
+        if (headers && headers.length > 0) {
+            return dataRows.map(row => {
+                if (Array.isArray(row)) {
+                    return headers.reduce((obj, header, index) => {
+                        if (!header) return obj;
+                        obj[header] = row[index];
+                        return obj;
+                    }, {});
+                }
+                if (row && typeof row === 'object') {
+                    return row;
+                }
+                if (row === null || row === undefined) {
+                    return {};
+                }
+                const labelKey = headers[0] || fallbackLabel || 'Name';
+                return { [labelKey]: row };
+            });
+        }
+
+        if (rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) {
+            return rows;
+        }
+
+        return rows.map((row) => {
+            if (Array.isArray(row)) {
+                const [label, amount, percentage, ...rest] = row;
+                const item = {};
+                if (label !== undefined) {
+                    item[fallbackLabel || 'Name'] = label;
+                }
+                if (amount !== undefined) {
+                    item.amount = amount;
+                }
+                if (percentage !== undefined) {
+                    item.percentage = percentage;
+                }
+                rest.forEach((value, idx) => {
+                    item[`col_${idx + 3}`] = value;
+                });
+                return item;
+            }
+            if (row && typeof row === 'object') {
+                return row;
+            }
+            return { [fallbackLabel || 'Name']: row };
+        });
+    }
+
+    function inferHeaders(sourceData) {
+        if (!sourceData || typeof sourceData !== 'object') return null;
+        const headerKeys = ['headers', 'columns', 'fields', 'fieldNames', 'labels', 'keys'];
+        for (const key of headerKeys) {
+            if (Array.isArray(sourceData[key]) && sourceData[key].length > 0) {
+                return sourceData[key];
+            }
+        }
+        return null;
+    }
+
+    function inferHeadersFromRows(rows) {
+        if (!Array.isArray(rows) || rows.length === 0) return null;
+        const firstRow = rows[0];
+        if (Array.isArray(firstRow) && firstRow.length > 0 && firstRow.every(cell => typeof cell === 'string' && cell.trim() !== '')) {
+            return firstRow;
+        }
+        return null;
+    }
+
+    function isHeaderRow(row, headers) {
+        if (!Array.isArray(row) || !Array.isArray(headers)) return false;
+        if (headers.length === 0) return false;
+        if (row.length < headers.length) return false;
+        return headers.every((header, index) => {
+            if (!header) return true;
+            const cell = row[index];
+            if (typeof cell !== 'string') return false;
+            return normalizeKeyForComparison(cell) === normalizeKeyForComparison(header);
+        });
+    }
+
+    function normalizeReportItem(rawItem, fallbackLabel) {
+        if (!rawItem || typeof rawItem !== 'object') {
+            return {
+                name: String(rawItem ?? fallbackLabel ?? ''),
+                amount: 0,
+                percentage: null
+            };
+        }
+
+        const normalizedMap = buildNormalizedKeyMap(rawItem);
+
+        let name = rawItem.name || rawItem.label || rawItem.team || rawItem.person || rawItem.category || rawItem.key || rawItem.id || rawItem.title || '';
+        if (!name) {
+            const { value: nameCandidate } = findValueByKeyCandidates(normalizedMap, rawItem, [
+                'name', 'display name', 'title', 'beschreibung', 'bezeichnung',
+                'team name', 'teamname', 'team', 'gruppe', 'gruppenname', 'abteilung', 'unit', 'bereich', 'agentur', 'agent',
+                'person name', 'personname', 'person', 'mitarbeiter', 'mitarbeiter/in', 'mitarbeiter name', 'mitarbeitername',
+                'employee', 'salesperson', 'seller', 'berater', 'consultant', 'owner', 'kunde', 'kundenname', 'customer', 'account'
+            ]);
+            if (nameCandidate !== undefined) {
+                name = nameCandidate;
+            }
+        }
+
+        const amountMatch = findValueByKeyCandidates(normalizedMap, rawItem, [
+            'amount', 'value', 'total', 'sum', 'netto', 'netto summe', 'netto gesamt', 'umsatz', 'sales', 'revenue', 'betrag', 'total netto',
+            'gesamt', 'gesamtbetrag', 'net amount', 'assigned amount', 'allocated', 'commission', 'provision'
+        ]);
+        let amount = amountMatch.value !== undefined ? parseNumericValue(amountMatch.value) : null;
+
+        if (!Number.isFinite(amount)) {
+            amount = null;
+        }
+
+        if (amount === null) {
+            const fallbackNumericEntry = Object.entries(rawItem).find(([key, value]) => {
+                if (!isNumericValue(value)) return false;
+                const normalizedKey = normalizeKeyForComparison(key);
+                return normalizedKey && !['index', 'rank', 'position'].includes(normalizedKey);
+            });
+            if (fallbackNumericEntry) {
+                amount = parseNumericValue(fallbackNumericEntry[1]);
+                if (!name) {
+                    name = fallbackNumericEntry[0];
+                }
+            }
+        }
+
+        const percentageMatch = findValueByKeyCandidates(normalizedMap, rawItem, ['percentage', 'percent', 'share', 'anteil', 'quote', 'ratio', 'prozent']);
+        const parsedPercentage = percentageMatch.value !== undefined ? parseNumericValue(percentageMatch.value, true) : null;
+        const percentage = Number.isFinite(parsedPercentage) ? parsedPercentage : null;
+
+        if (!name) {
+            const measureKeywords = ['amount', 'value', 'total', 'sum', 'netto', 'umsatz', 'sales', 'revenue', 'betrag', 'percentage', 'percent', 'share', 'anteil', 'quote', 'ratio', 'prozent'];
+            const stringEntry = Object.entries(rawItem).find(([key, value]) => {
+                if (typeof value !== 'string' || value.trim() === '') return false;
+                const normalizedKey = normalizeKeyForComparison(key);
+                if (!normalizedKey) return true;
+                if (normalizedKey.startsWith('col')) return false;
+                return !measureKeywords.some(keyword => normalizedKey.includes(keyword));
+            });
+            if (stringEntry) {
+                name = stringEntry[1];
+            }
+        }
+
+        const normalizedFinalName = normalizeKeyForComparison(name);
+        if ((!name || isGenericLabel(normalizedFinalName)) && fallbackLabel) {
+            name = fallbackLabel;
+        }
+
+        return {
+            name: String(name || fallbackLabel || ''),
+            amount: Number.isFinite(amount) ? amount : 0,
+            percentage
+        };
+    }
+
+    function buildNormalizedKeyMap(obj) {
+        const map = new Map();
+        Object.keys(obj || {}).forEach(key => {
+            const normalized = normalizeKeyForComparison(key);
+            if (normalized && !map.has(normalized)) {
+                map.set(normalized, key);
+            }
+        });
+        return map;
+    }
+
+    function findValueByKeyCandidates(normalizedMap, source, candidates) {
+        for (const candidate of candidates) {
+            const normalizedCandidate = normalizeKeyForComparison(candidate);
+            if (normalizedCandidate && normalizedMap.has(normalizedCandidate)) {
+                const actualKey = normalizedMap.get(normalizedCandidate);
+                return { key: actualKey, value: source[actualKey] };
+            }
+        }
+        return { key: null, value: undefined };
+    }
+
+    function isGenericLabel(normalizedLabel) {
+        if (!normalizedLabel) return true;
+        const genericLabels = ['amount', 'value', 'total', 'sum', 'result', 'entry', 'item', 'row', 'percentage', 'percent', 'share', 'ratio'];
+        return genericLabels.some(generic => normalizedLabel === generic || normalizedLabel.startsWith(generic));
+    }
+
+    function parseNumericValue(value, allowNull = false) {
+        if (value === null || value === undefined || value === '') {
+            return allowNull ? null : 0;
+        }
+
+        if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : (allowNull ? null : 0);
+        }
+
+        if (typeof value === 'string') {
+            const cleaned = value
+                .replace(/\u00A0/g, ' ')
+                .replace(/\s+/g, '')
+                .replace(/[^0-9,\-\.]/g, '')
+                .replace(/,(?=\d{1,2}$)/, '.')
+                .replace(/\.(?=.*\.)/g, '');
+            if (!cleaned) {
+                return allowNull ? null : 0;
+            }
+            const parsed = Number(cleaned);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+
+        return allowNull ? null : 0;
+    }
+
+    function isNumericValue(value) {
+        if (typeof value === 'number') {
+            return Number.isFinite(value);
+        }
+        if (typeof value === 'string') {
+            const hasDigits = /[0-9]/.test(value);
+            if (!hasDigits) return false;
+            const parsed = parseNumericValue(value);
+            return Number.isFinite(parsed);
+        }
+        return false;
+    }
+
+    function formatPercentage(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        const num = Number(value);
+        if (!Number.isFinite(num)) {
+            return '';
+        }
+        return `${num.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
     }
 
     // Hilfsfunktion für Tabellen-Rendering
