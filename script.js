@@ -293,18 +293,53 @@ window.onload = function() {
          return String(header).replace(/^\uFEFF/, '').replace(/\u00A0/g, ' ').trim();
     }
 
+    function normalizeKeyForComparison(key) {
+         const sanitized = sanitizeHeader(key);
+         if (!sanitized) return '';
+         return sanitized
+             .toLowerCase()
+             .normalize('NFKD')
+             .replace(/[\u0300-\u036f]/g, '')
+             .replace(/[\s\-_().,:;\/\\]+/g, '')
+             .replace(/€|eur/g, '')
+             .trim();
+    }
+
     function createHeaderMapper(aliases) {
-         const aliasMap = new Map();
+         const directAliasMap = new Map();
+         const normalizedAliasMap = new Map();
+
+         const registerAlias = (alias, canonicalKey) => {
+              const sanitizedAlias = sanitizeHeader(alias);
+              if (!sanitizedAlias) return;
+              directAliasMap.set(sanitizedAlias.toLowerCase(), canonicalKey);
+              const normalizedAlias = normalizeKeyForComparison(sanitizedAlias);
+              if (normalizedAlias) {
+                   normalizedAliasMap.set(normalizedAlias, canonicalKey);
+              }
+         };
+
          Object.entries(aliases || {}).forEach(([canonical, list]) => {
               const canonicalKey = String(canonical);
-              aliasMap.set(canonicalKey.toLowerCase(), canonicalKey);
-              (list || []).forEach(alias => aliasMap.set(String(alias).toLowerCase(), canonicalKey));
+              registerAlias(canonicalKey, canonicalKey);
+              (list || []).forEach(alias => registerAlias(alias, canonicalKey));
          });
+
          return (header) => {
               const sanitized = sanitizeHeader(header);
               if (!sanitized) return sanitized;
-              const mapped = aliasMap.get(sanitized.toLowerCase());
-              return mapped || sanitized;
+
+              const lower = sanitized.toLowerCase();
+              if (directAliasMap.has(lower)) {
+                   return directAliasMap.get(lower);
+              }
+
+              const normalized = normalizeKeyForComparison(sanitized);
+              if (normalized && normalizedAliasMap.has(normalized)) {
+                   return normalizedAliasMap.get(normalized);
+              }
+
+              return sanitized;
          };
     }
 
@@ -319,15 +354,30 @@ window.onload = function() {
 
     function validateColumns(rows, requiredColumns, datasetLabel) {
          const available = new Set();
+         const availableNormalized = new Map();
+
          (rows || []).forEach(row => {
               if (!row || typeof row !== 'object') return;
               Object.keys(row).forEach(key => {
-                   if (key) available.add(key);
+                   if (!key) return;
+                   available.add(key);
+                   const normalized = normalizeKeyForComparison(key);
+                   if (normalized && !availableNormalized.has(normalized)) {
+                        availableNormalized.set(normalized, key);
+                   }
               });
          });
-         const missing = (requiredColumns || []).filter(col => !available.has(col));
+
+         const missing = (requiredColumns || []).filter(col => {
+              if (available.has(col)) return false;
+              const normalizedRequired = normalizeKeyForComparison(col);
+              return !availableNormalized.has(normalizedRequired);
+         });
+
          if (missing.length > 0) {
-              throw new Error(`${datasetLabel}: Fehlende Pflichtspalten (${missing.join(', ')})`);
+              const availableList = Array.from(availableNormalized.values());
+              const availableInfo = availableList.length > 0 ? availableList.join(', ') : 'keine';
+              throw new Error(`${datasetLabel}: Fehlende Pflichtspalten (${missing.join(', ')}). Gefunden: ${availableInfo}`);
          }
     }
 
